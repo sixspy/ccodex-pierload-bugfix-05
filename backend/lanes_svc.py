@@ -4,7 +4,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException
 
 from auth import AuthHeader, require_user, require_writer
-from db import connect, now_iso, write_audit
+from db import connect, no_bl_state, now_iso, write_audit
 from models import LaneIn
 
 router = APIRouter(tags=["lanes"])
@@ -14,6 +14,7 @@ router = APIRouter(tags=["lanes"])
 def list_lanes(authorization: AuthHeader = None, bridge_id: int | None = None):
     require_user(authorization)
     with connect() as conn:
+        state = no_bl_state(conn)
         if bridge_id:
             rows = conn.execute(
                 """SELECT l.*, b.bridge_code, b.name bridge_name FROM weigh_lanes l
@@ -27,7 +28,13 @@ def list_lanes(authorization: AuthHeader = None, bridge_id: int | None = None):
                    JOIN weigh_bridges b ON b.id=l.bridge_id
                    ORDER BY l.lane_code"""
             ).fetchall()
-        return {"items": [dict(r) for r in rows]}
+        return {
+            "items": [dict(r) for r in rows],
+            "orphan_by_lane": state["orphan_by_lane"],
+            "orphan_count": state["orphan_count"],
+            "orphan_gross_t": state["orphan_gross_t"],
+            "banned_today": state["banned_today"],
+        }
 
 
 @router.get("/api/lanes/{lane_id}")
@@ -47,7 +54,18 @@ def get_lane(lane_id: int, authorization: AuthHeader = None):
                WHERE lane_id=? ORDER BY id DESC LIMIT 8""",
             (lane_id,),
         ).fetchall()
-        return {"lane": dict(row), "recent_tickets": [dict(t) for t in tickets]}
+        state = no_bl_state(conn)
+        lane_orphans = next(
+            (x for x in state["orphan_by_lane"] if x["lane_id"] == int(lane_id)),
+            {"lane_id": int(lane_id), "count": 0, "gross_t": 0.0},
+        )
+        return {
+            "lane": dict(row),
+            "recent_tickets": [dict(t) for t in tickets],
+            "orphan_count": lane_orphans["count"],
+            "orphan_gross_t": lane_orphans["gross_t"],
+            "banned_today": state["banned_today"],
+        }
 
 
 @router.post("/api/lanes")

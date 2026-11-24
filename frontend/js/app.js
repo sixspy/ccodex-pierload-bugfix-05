@@ -40,6 +40,8 @@ createApp({
     const ticketDetail = ref(null);
     const reconOne = ref(null);
     const reconAllItems = ref([]);
+    const reconcile = ref(null);
+    const blState = ref({ orphans: [], orphan_count: 0, orphan_gross_t: 0, banned_today: [], banned_codes: [] });
     const proofOne = ref(null);
     const reconCode = ref("BL-2026-0101");
     const proofCode = ref("WT-LN-N-01-IN-001");
@@ -126,10 +128,10 @@ createApp({
       if (!token.value) return;
       clearFlash();
       try {
-        const [d, br, ln, tk, ov, gr, sl, bl, lg, cj, cj2] = await Promise.all([
+        const [d, br, ln, tk, ov, gr, sl, bl, lg, cj, cj2, rc] = await Promise.all([
           api.dashboard(), api.bridges(), api.lanes(), api.tickets(), api.overloads(),
           api.gateReleases(), api.seals(), api.blList(), api.lineage(),
-          api.customsJobs(), api.craneJobs(),
+          api.customsJobs(), api.craneJobs(), api.reconcileAll(),
         ]);
         dash.value = d || {};
         bridges.value = br.items || [];
@@ -142,6 +144,15 @@ createApp({
         lineageEdges.value = lg.items || [];
         customsJobs.value = cj.items || [];
         craneJobs.value = cj2.items || [];
+        reconAllItems.value = rc.items || [];
+        reconcile.value = rc || null;
+        blState.value = {
+          orphans: bl.orphans || [],
+          orphan_count: bl.orphan_count || 0,
+          orphan_gross_t: bl.orphan_gross_t || 0,
+          banned_today: bl.banned_today || [],
+          banned_codes: bl.banned_codes || [],
+        };
         if (bridges.value.length) {
           laneForm.value.bridge_id = laneForm.value.bridge_id || bridges.value[0].id;
         }
@@ -236,7 +247,11 @@ createApp({
     }
     async function loadAllReconcile() {
       clearFlash();
-      try { reconAllItems.value = (await api.reconcileAll()).items || []; }
+      try {
+        const rc = await api.reconcileAll();
+        reconAllItems.value = rc.items || [];
+        reconcile.value = rc || null;
+      }
       catch (e) { flashErr(e); }
     }
     async function loadProof() {
@@ -263,7 +278,7 @@ createApp({
       token, user, username, password, err, actionErr, actionOk, tab, nav,
       dash, bridges, lanes, tickets, overloads, gateReleases, seals, blList,
       lineageEdges, customsJobs, craneJobs, bridgeDetail, ticketDetail,
-      reconOne, reconAllItems, proofOne, reconCode, proofCode,
+      reconOne, reconAllItems, reconcile, blState, proofOne, reconCode, proofCode,
       bridgeForm, laneForm, ticketForm, overloadOpenForm, gateForm, sealForm,
       blForm, lineageForm, customsForm, craneForm,
       adjudicableTickets, releasableTickets, sealableTickets,

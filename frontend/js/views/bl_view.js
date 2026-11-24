@@ -12,6 +12,33 @@ export const blViewTemplate = `
     <button @click="registerBl">登记提单</button>
     <button class="secondary" @click="refresh">刷新</button>
   </div>
+  <div v-if="blState.banned_today.length" class="detail-box">
+    <p class="recon-warn">当日无单禁建（已锁死，无匹配提单不得建票）</p>
+    <table class="data-table compact">
+      <thead><tr><th>提单</th><th>尝试</th><th>最后判定</th></tr></thead>
+      <tbody>
+        <tr v-for="b in blState.banned_today" :key="b.target">
+          <td>{{ b.target }}</td>
+          <td>{{ b.attempts }}</td>
+          <td>{{ b.last_at }}</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div v-if="blState.orphans.length" class="detail-box">
+    <p class="recon-warn">无提单票 {{ blState.orphan_count }} 张 · 累计在港毛重 {{ blState.orphan_gross_t }}t（不计入任何提单对账）</p>
+    <table class="data-table compact">
+      <thead><tr><th>票号</th><th>提单(无匹配)</th><th>状态</th><th>毛重</th></tr></thead>
+      <tbody>
+        <tr v-for="o in blState.orphans" :key="o.id">
+          <td>{{ o.ticket_code }}</td>
+          <td>{{ o.bl_ref }}</td>
+          <td>{{ o.status }}</td>
+          <td>{{ fmtT(o.gross_t) }}</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
   <table class="data-table">
     <thead><tr><th>提单</th><th>货描</th><th>申报吨</th><th>航次</th><th>状态</th></tr></thead>
     <tbody>

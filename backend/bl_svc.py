@@ -4,7 +4,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException
 
 from auth import AuthHeader, require_user, require_writer
-from db import connect, now_iso, write_audit
+from db import connect, no_bl_state, now_iso, write_audit
 from models import BlIn
 
 router = APIRouter(tags=["bl"])
@@ -17,7 +17,15 @@ def list_bl(authorization: AuthHeader = None):
         rows = conn.execute(
             "SELECT * FROM bl_manifests ORDER BY bl_code"
         ).fetchall()
-        return {"items": [dict(r) for r in rows]}
+        state = no_bl_state(conn)
+        return {
+            "items": [dict(r) for r in rows],
+            "orphan_count": state["orphan_count"],
+            "orphan_gross_t": state["orphan_gross_t"],
+            "orphans": state["orphans"],
+            "banned_today": state["banned_today"],
+            "banned_codes": state["banned_codes"],
+        }
 
 
 @router.get("/api/bl/{bl_code}")
@@ -34,7 +42,14 @@ def get_bl(bl_code: str, authorization: AuthHeader = None):
                WHERE bl_ref=? ORDER BY id DESC""",
             (bl_code,),
         ).fetchall()
-        return {"bl": dict(row), "tickets": [dict(t) for t in tickets]}
+        state = no_bl_state(conn)
+        return {
+            "bl": dict(row),
+            "tickets": [dict(t) for t in tickets],
+            "banned_today": state["banned_today"],
+            "orphan_count": state["orphan_count"],
+            "orphan_gross_t": state["orphan_gross_t"],
+        }
 
 
 @router.post("/api/bl")

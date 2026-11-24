@@ -13,7 +13,35 @@ export const reconcileViewTemplate = `
     <div v-if="reconOne" class="detail-box">
       <p>申报 {{ reconOne.declared_gross_t }}t · 过磅合计 {{ reconOne.ticket_sum_t }}t</p>
       <p :class="reconOne.balanced ? 'ok' : 'bad'">{{ reconOne.balanced ? '账实平衡' : '偏差待查' }}</p>
+      <p v-if="!reconOne.balanced && reconOne.reason" class="recon-warn">{{ reconOne.reason }}</p>
       <p>快照数 {{ reconOne.seal_count }} · 可出证明 {{ reconOne.proof_ready ? '是' : '否' }}</p>
+    </div>
+    <div v-if="reconcile && reconcile.orphans.length" class="detail-box">
+      <p class="recon-warn">无提单票 {{ reconcile.orphan_count }} 张 · 累计在港毛重 {{ reconcile.orphan_gross_t }}t（不计入任何提单对账）</p>
+      <table class="data-table compact">
+        <thead><tr><th>票号</th><th>提单(无匹配)</th><th>车道</th><th>毛重</th></tr></thead>
+        <tbody>
+          <tr v-for="o in reconcile.orphans" :key="o.id">
+            <td>{{ o.ticket_code }}</td>
+            <td>{{ o.bl_ref }}</td>
+            <td>{{ o.lane_code }}</td>
+            <td>{{ fmtT(o.gross_t) }}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div v-if="reconcile && reconcile.banned_today.length" class="detail-box">
+      <p class="recon-warn">当日无单禁建（已锁死）</p>
+      <table class="data-table compact">
+        <thead><tr><th>提单</th><th>尝试</th><th>最后判定</th></tr></thead>
+        <tbody>
+          <tr v-for="b in reconcile.banned_today" :key="b.target">
+            <td>{{ b.target }}</td>
+            <td>{{ b.attempts }}</td>
+            <td>{{ b.last_at }}</td>
+          </tr>
+        </tbody>
+      </table>
     </div>
     <ul v-if="reconAllItems.length">
       <li v-for="r in reconAllItems" :key="r.bl_code">{{ r.bl_code }} · {{ r.balanced ? '平' : '偏' }}</li>

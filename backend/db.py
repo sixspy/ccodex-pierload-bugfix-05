@@ -451,6 +451,59 @@ def init_db() -> None:
         conn.commit()
 
 
+def orphan_summary(conn: sqlite3.Connection) -> dict:
+    """无提单票（bl_ref 在提单册无匹配）唯一口径。
+
+    五页（总览/车道/对账/提单/过磅）一律引用本函数，不得各自另算。
+    无单票不得计入任何提单对账合计，也不得被静默吞掉。
+    """
+    rows = conn.execute(
+        """SELECT t.id, t.ticket_code, t.bl_ref, t.gross_t, t.status,
+                  t.lane_id, l.lane_code
+           FROM weigh_tickets t
+           LEFT JOIN weigh_lanes l ON l.id=t.lane_id
+           WHERE t.status != '作废'
+             AND NOT EXISTS (
+               SELECT 1 FROM bl_manifests b WHERE b.bl_code=t.bl_ref
+             )
+           ORDER BY t.id DESC"""
+    ).fetchall()
+    items = [dict(r) for r in rows]
+    by_lane: dict[int, dict] = {}
+    for r in items:
+        bucket = by_lane.setdefault(
+            int(r["lane_id"]), {"lane_id": int(r["lane_id"]), "count": 0, "gross_t": 0.0}
+        )
+        bucket["count"] += 1
+        bucket["gross_t"] = round(bucket["gross_t"] + float(r["gross_t"]), 3)
+    return {
+        "orphans": items,
+        "orphan_count": len(items),
+        "orphan_gross_t": round(sum(float(r["gross_t"]) for r in items), 3),
+        "orphan_by_lane": sorted(by_lane.values(), key=lambda x: x["lane_id"]),
+    }
+
+
+def banned_today(conn: sqlite3.Connection) -> list[dict]:
+    """当日“无单禁建”判定（审计源头），供五页同源展示。"""
+    rows = conn.execute(
+        """SELECT target, MAX(created_at) last_at, COUNT(*) attempts
+           FROM audit_trail
+           WHERE action='ticket_reject_no_bl' AND created_at LIKE ?
+           GROUP BY target ORDER BY target""",
+        (now_iso()[:10] + "%",),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def no_bl_state(conn: sqlite3.Connection) -> dict:
+    """无单禁建 + 无提单票的唯一同源状态（五页同源顺序：总览/车道/对账/提单/过磅）。"""
+    state = orphan_summary(conn)
+    state["banned_today"] = banned_today(conn)
+    state["banned_codes"] = [b["target"] for b in state["banned_today"]]
+    return state
+
+
 def dashboard_stats(conn: sqlite3.Connection) -> dict:
     bridges = conn.execute("SELECT COUNT(*) c FROM weigh_bridges").fetchone()["c"]
     lanes = conn.execute("SELECT COUNT(*) c FROM weigh_lanes").fetchone()["c"]
@@ -477,6 +530,8 @@ def dashboard_stats(conn: sqlite3.Connection) -> dict:
         """SELECT COUNT(*) c FROM weigh_tickets
            WHERE status='旁路挂起'"""
     ).fetchone()["c"]
+    orphan = orphan_summary(conn)
+    banned = banned_today(conn)
     return {
         "bridges": bridges,
         "lanes": lanes,
@@ -486,6 +541,9 @@ def dashboard_stats(conn: sqlite3.Connection) -> dict:
         "gate_seals": sealed,
         "bl_manifests": bl_count,
         "side_pending": pending,
+        "orphan_count": orphan["orphan_count"],
+        "orphan_gross_t": orphan["orphan_gross_t"],
+        "banned_today": banned,
         "stubs": stubs,
         "meta": PRODUCT_META,
     }

@@ -4,9 +4,12 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException
 
 from auth import AuthHeader, require_user
+from db import no_bl_state, now_iso
 from validators import validate_bl_match
 
 router = APIRouter(tags=["reconcile"])
+
+NO_TICKET_REASON = "无过磅票，不得计平（单据缺失）"
 
 
 @router.get("/api/reconcile")
@@ -21,7 +24,18 @@ def reconcile_all(authorization: AuthHeader = None):
         items = []
         for bl in rows:
             items.append(_reconcile_bl(conn, bl["bl_code"]))
-        return {"items": items}
+        orphan = no_bl_state(conn)
+        return {
+            "items": items,
+            "checked_at": now_iso(),
+            "orphans": orphan["orphans"],
+            "orphan_count": orphan["orphan_count"],
+            "orphan_gross_t": orphan["orphan_gross_t"],
+            "banned_today": orphan["banned_today"],
+            "banned_codes": orphan["banned_codes"],
+            "balanced_count": sum(1 for x in items if x["balanced"]),
+            "unbalanced_count": sum(1 for x in items if not x["balanced"]),
+        }
 
 
 @router.get("/api/reconcile/{bl_code}")
@@ -43,19 +57,25 @@ def _reconcile_bl(conn, bl_code: str) -> dict:
         "SELECT * FROM bl_manifests WHERE bl_code=?", (bl_code,)
     ).fetchone()
     tickets = conn.execute(
-        """SELECT ticket_code, gross_t, status, generation FROM weigh_tickets
-           WHERE bl_ref=? AND status NOT IN ('作废')""",
-        (bl_code,),
+        """SELECT t.ticket_code, t.gross_t, t.status, t.generation
+           FROM weigh_tickets t
+           JOIN bl_manifests b ON b.bl_code=t.bl_ref
+           WHERE t.bl_ref=? AND t.status NOT IN ('作废')
+             AND b.bl_code=?""",
+        (bl_code, bl_code),
     ).fetchall()
     if not tickets:
-        # BUGFIX-05 埋雷：空票对账也假绿
+        # 禁建修复（乙）：无票即不得计平，亦不得回报“已计齐”
         return {
             "bl_code": bl_code,
             "declared_gross_t": bl["declared_gross_t"],
             "ticket_sum_t": 0,
-            "balanced": True,
-            "reason": "无过磅票亦计齐",
+            "balanced": False,
+            "proof_ready": False,
+            "seal_count": 0,
+            "reason": NO_TICKET_REASON,
             "tickets": [],
+            "seals": [],
         }
     ticket_sum = round(sum(float(t["gross_t"]) for t in tickets), 3)
     declared = float(bl["declared_gross_t"])

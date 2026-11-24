@@ -426,6 +426,33 @@ export const blViewTemplate = `
     <button @click="registerBl">登记提单</button>
     <button class="secondary" @click="refresh">刷新</button>
   </div>
+  <div v-if="blState.banned_today.length" class="detail-box">
+    <p class="recon-warn">当日无单禁建（已锁死，无匹配提单不得建票）</p>
+    <table class="data-table compact">
+      <thead><tr><th>提单</th><th>尝试</th><th>最后判定</th></tr></thead>
+      <tbody>
+        <tr v-for="b in blState.banned_today" :key="b.target">
+          <td>{{ b.target }}</td>
+          <td>{{ b.attempts }}</td>
+          <td>{{ b.last_at }}</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div v-if="blState.orphans.length" class="detail-box">
+    <p class="recon-warn">无提单票 {{ blState.orphan_count }} 张 · 累计在港毛重 {{ blState.orphan_gross_t }}t（不计入任何提单对账）</p>
+    <table class="data-table compact">
+      <thead><tr><th>票号</th><th>提单(无匹配)</th><th>状态</th><th>毛重</th></tr></thead>
+      <tbody>
+        <tr v-for="o in blState.orphans" :key="o.id">
+          <td>{{ o.ticket_code }}</td>
+          <td>{{ o.bl_ref }}</td>
+          <td>{{ o.status }}</td>
+          <td>{{ fmtT(o.gross_t) }}</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
   <table class="data-table">
     <thead><tr><th>提单</th><th>货描</th><th>申报吨</th><th>航次</th><th>状态</th></tr></thead>
     <tbody>
@@ -495,7 +522,35 @@ export const reconcileViewTemplate = `
     <div v-if="reconOne" class="detail-box">
       <p>申报 {{ reconOne.declared_gross_t }}t · 过磅合计 {{ reconOne.ticket_sum_t }}t</p>
       <p :class="reconOne.balanced ? 'ok' : 'bad'">{{ reconOne.balanced ? '账实平衡' : '偏差待查' }}</p>
+      <p v-if="!reconOne.balanced && reconOne.reason" class="recon-warn">{{ reconOne.reason }}</p>
       <p>快照数 {{ reconOne.seal_count }} · 可出证明 {{ reconOne.proof_ready ? '是' : '否' }}</p>
+    </div>
+    <div v-if="reconcile && reconcile.orphans.length" class="detail-box">
+      <p class="recon-warn">无提单票 {{ reconcile.orphan_count }} 张 · 累计在港毛重 {{ reconcile.orphan_gross_t }}t（不计入任何提单对账）</p>
+      <table class="data-table compact">
+        <thead><tr><th>票号</th><th>提单(无匹配)</th><th>车道</th><th>毛重</th></tr></thead>
+        <tbody>
+          <tr v-for="o in reconcile.orphans" :key="o.id">
+            <td>{{ o.ticket_code }}</td>
+            <td>{{ o.bl_ref }}</td>
+            <td>{{ o.lane_code }}</td>
+            <td>{{ fmtT(o.gross_t) }}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div v-if="reconcile && reconcile.banned_today.length" class="detail-box">
+      <p class="recon-warn">当日无单禁建（已锁死）</p>
+      <table class="data-table compact">
+        <thead><tr><th>提单</th><th>尝试</th><th>最后判定</th></tr></thead>
+        <tbody>
+          <tr v-for="b in reconcile.banned_today" :key="b.target">
+            <td>{{ b.target }}</td>
+            <td>{{ b.attempts }}</td>
+            <td>{{ b.last_at }}</td>
+          </tr>
+        </tbody>
+      </table>
     </div>
     <ul v-if="reconAllItems.length">
       <li v-for="r in reconAllItems" :key="r.bl_code">{{ r.bl_code }} · {{ r.balanced ? '平' : '偏' }}</li>
@@ -638,6 +693,8 @@ createApp({
     const ticketDetail = ref(null);
     const reconOne = ref(null);
     const reconAllItems = ref([]);
+    const reconcile = ref(null);
+    const blState = ref({ orphans: [], orphan_count: 0, orphan_gross_t: 0, banned_today: [], banned_codes: [] });
     const proofOne = ref(null);
     const reconCode = ref("BL-2026-0101");
     const proofCode = ref("WT-LN-N-01-IN-001");
@@ -724,10 +781,10 @@ createApp({
       if (!token.value) return;
       clearFlash();
       try {
-        const [d, br, ln, tk, ov, gr, sl, bl, lg, cj, cj2] = await Promise.all([
+        const [d, br, ln, tk, ov, gr, sl, bl, lg, cj, cj2, rc] = await Promise.all([
           api.dashboard(), api.bridges(), api.lanes(), api.tickets(), api.overloads(),
           api.gateReleases(), api.seals(), api.blList(), api.lineage(),
-          api.customsJobs(), api.craneJobs(),
+          api.customsJobs(), api.craneJobs(), api.reconcileAll(),
         ]);
         dash.value = d || {};
         bridges.value = br.items || [];
@@ -740,6 +797,15 @@ createApp({
         lineageEdges.value = lg.items || [];
         customsJobs.value = cj.items || [];
         craneJobs.value = cj2.items || [];
+        reconAllItems.value = rc.items || [];
+        reconcile.value = rc || null;
+        blState.value = {
+          orphans: bl.orphans || [],
+          orphan_count: bl.orphan_count || 0,
+          orphan_gross_t: bl.orphan_gross_t || 0,
+          banned_today: bl.banned_today || [],
+          banned_codes: bl.banned_codes || [],
+        };
         if (bridges.value.length) {
           laneForm.value.bridge_id = laneForm.value.bridge_id || bridges.value[0].id;
         }
@@ -834,7 +900,11 @@ createApp({
     }
     async function loadAllReconcile() {
       clearFlash();
-      try { reconAllItems.value = (await api.reconcileAll()).items || []; }
+      try {
+        const rc = await api.reconcileAll();
+        reconAllItems.value = rc.items || [];
+        reconcile.value = rc || null;
+      }
       catch (e) { flashErr(e); }
     }
     async function loadProof() {
@@ -867,7 +937,7 @@ createApp({
       token, user, username, password, err, actionErr, actionOk, tab, nav,
       dash, bridges, lanes, tickets, overloads, gateReleases, seals, blList,
       lineageEdges, customsJobs, craneJobs, bridgeDetail, ticketDetail,
-      reconOne, reconAllItems, proofOne, reconCode, proofCode,
+      reconOne, reconAllItems, reconcile, blState, proofOne, reconCode, proofCode,
       bridgeForm, laneForm, ticketForm, overloadOpenForm, gateForm, sealForm,
       blForm, lineageForm, customsForm, craneForm,
       adjudicableTickets, releasableTickets, sealableTickets,
